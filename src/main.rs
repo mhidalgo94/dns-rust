@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::{Ipv4Addr, Ipv6Addr, UdpSocket};
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
@@ -346,6 +346,11 @@ impl DnsHeader {
 pub enum QueryType {
     UNKNOWN(u16),
     A, // 1
+    NS, // 2
+    CNAME, // 3
+    MX, // 15
+    AAAA, // 28
+
 }
 
 impl QueryType {
@@ -353,12 +358,20 @@ impl QueryType {
         match *self {
             QueryType::UNKNOWN(x) => x,
             QueryType::A => 1,
+            QueryType::NS => 2,
+            QueryType::CNAME => 5,
+            QueryType::MX => 15,
+            QueryType::AAAA => 28,
         }
     }
 
     pub fn from_num(num: u16) -> QueryType {
         match num {
             1 => QueryType::A,
+            2 => QueryType::NS,
+            5 => QueryType::CNAME,
+            15 => QueryType::MX,
+            28 => QueryType::AAAA,
             _ => QueryType::UNKNOWN(num),
         }
     }
@@ -408,6 +421,27 @@ pub enum DnsRecord {
         addr: Ipv4Addr,
         ttl: u32,
     }, // 1
+    NS {
+        domain: String,
+        host: String,
+        ttl: u32,
+    }, // 2
+    CNAME {
+        domain: String,
+        host: String,
+        ttl: u32,
+    }, // 5
+    MX {
+        domain: String,
+        priority: u16,
+        host: String,
+        ttl: u32,
+    }, // 15
+    AAAA {
+        domain: String,
+        addr: Ipv6Addr,
+        ttl: u32,
+    }, // 28
 }
 
 impl DnsRecord {
@@ -431,16 +465,74 @@ impl DnsRecord {
                     ((raw_addr >> 0) & 0xFF) as u8,
                 );
 
-                Ok(DnsRecord::A { domain, addr, ttl })
+                Ok(DnsRecord::A {
+                    domain: domain,
+                    addr: addr,
+                    ttl: ttl,
+                })
+            }
+            QueryType::AAAA => {
+                let raw_addr1 = buffer.read_u32()?;
+                let raw_addr2 = buffer.read_u32()?;
+                let raw_addr3 = buffer.read_u32()?;
+                let raw_addr4 = buffer.read_u32()?;
+                let addr = Ipv6Addr::new(
+                    ((raw_addr1 >> 16) & 0xFFFF) as u16,
+                    ((raw_addr1 >> 0) & 0xFFFF) as u16,
+                    ((raw_addr2 >> 16) & 0xFFFF) as u16,
+                    ((raw_addr2 >> 0) & 0xFFFF) as u16,
+                    ((raw_addr3 >> 16) & 0xFFFF) as u16,
+                    ((raw_addr3 >> 0) & 0xFFFF) as u16,
+                    ((raw_addr4 >> 16) & 0xFFFF) as u16,
+                    ((raw_addr4 >> 0) & 0xFFFF) as u16,
+                );
+
+                Ok(DnsRecord::AAAA {
+                    domain: domain,
+                    addr: addr,
+                    ttl: ttl,
+                })
+            }
+            QueryType::NS => {
+                let mut ns = String::new();
+                buffer.read_qname(&mut ns)?;
+
+                Ok(DnsRecord::NS {
+                    domain: domain,
+                    host: ns,
+                    ttl: ttl,
+                })
+            }
+            QueryType::CNAME => {
+                let mut cname = String::new();
+                buffer.read_qname(&mut cname)?;
+
+                Ok(DnsRecord::CNAME {
+                    domain: domain,
+                    host: cname,
+                    ttl: ttl,
+                })
+            }
+            QueryType::MX => {
+                let priority = buffer.read_u16()?;
+                let mut mx = String::new();
+                buffer.read_qname(&mut mx)?;
+
+                Ok(DnsRecord::MX {
+                    domain: domain,
+                    priority: priority,
+                    host: mx,
+                    ttl: ttl,
+                })
             }
             QueryType::UNKNOWN(_) => {
                 buffer.step(data_len as usize)?;
 
                 Ok(DnsRecord::UNKNOWN {
-                    domain,
+                    domain: domain,
                     qtype: qtype_num,
-                    data_len,
-                    ttl,
+                    data_len: data_len,
+                    ttl: ttl,
                 })
             }
         }
@@ -555,7 +647,7 @@ impl DnsPacket {
 
 fn main() -> Result<()> {
     // Perform an A query for google.com
-    let qname = "google.com";
+    let qname = "www.yahoo.com";
     let qtype = QueryType::A;
 
     // Using googles public DNS server
